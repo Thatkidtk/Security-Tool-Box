@@ -234,6 +234,9 @@ enum Commands {
         /// Disable favicon fetching/hash
         #[arg(long, default_value_t = false)]
         no_favicon: bool,
+        /// Non-zero exit if any target fails (prints short summary to stderr)
+        #[arg(long, default_value_t = false)]
+        strict: bool,
     },
     /// Forensics utilities: hash and identify files
     #[cfg(feature = "forensics")]
@@ -246,6 +249,12 @@ enum Commands {
     Creds {
         #[command(subcommand)]
         cmd: CredsCmd,
+    },
+    /// Results DB operations: import/export/query
+    #[cfg(feature = "results")]
+    Results {
+        #[command(subcommand)]
+        cmd: ResultsCmd,
     },
     /// UDP probe for common services (dns, ntp)
     #[cfg(feature = "udp")]
@@ -267,6 +276,13 @@ enum Commands {
     },
 }
 
+#[cfg(feature = "results")]
+#[derive(Debug, Subcommand)]
+enum ResultsCmd {
+    Import { #[arg(long)] db: PathBuf, #[arg(long, value_name = "FILE")] from: PathBuf },
+    Export { #[arg(long)] db: PathBuf, #[arg(long)] table: String, #[arg(long)] format: String, #[arg(long)] out: PathBuf },
+    Query  { #[arg(long)] db: PathBuf, #[arg(long)] sql: String, #[arg(long, default_value="jsonl")] format: String, #[arg(long)] out: Option<PathBuf> },
+}
 fn main() -> Result<()> {
     let cli = Cli::parse();
     #[cfg(any(feature = "scan", feature = "discover"))]
@@ -336,6 +352,136 @@ fn main() -> Result<()> {
                 }
             }
         }
+        #[cfg(feature = "results")]
+        Commands::Results { cmd } => {
+            match cmd {
+                ResultsCmd::Import { db, from } => {
+                    use results_sqlite as rdb;
+                    let dbh = rdb::Db::open_or_create(&db)?;
+                    // Build run metadata
+                    let run_id = uuid::Uuid::now_v7();
+                    let started_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+                    let meta = rdb::RunMeta { run_id, started_at, tool_version: env!("CARGO_PKG_VERSION").to_string(), args_json: serde_json::to_string(&std::env::args().collect::<Vec<_>>())?, git_sha: None };
+                    dbh.begin_run(meta)?;
+                    // naive importer: detects web-scan or scan aggregate lines
+                    let mut host_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    let mut err_count = 0i64;
+                    let s = std::fs::read_to_string(&from)?;
+                    for line in s.lines() {
+                        if line.trim().is_empty() { continue; }
+                        let v: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(e) => { err_count+=1; continue } };
+                        if v.get("final_url").is_some() {
+                            // web endpoint
+                            let target = v.get("target").and_then(|x| x.as_str()).unwrap_or("");
+                            let url = v.get("url").and_then(|x| x.as_str()).unwrap_or("");
+                            let status = v.get("status").and_then(|x| x.as_i64()).map(|x| x as i32);
+                            let server = v.get("server").and_then(|x| x.as_str()).map(|s| s.to_string());
+                            let title = v.get("title").and_then(|x| x.as_str()).map(|s| s.to_string());
+                            let started_ms = v.get("started_at").and_then(|x| x.as_str()).map(|_| 0).unwrap_or(0); // skip ISO parsing for now
+                            let collected_ms = v.get("duration_ms").and_then(|x| x.as_i64()).unwrap_or(0);
+                            // upsert host and port
+                            let host_id = dbh.upsert_host(&run_id, target, None)?;
+                            // try derive port from url
+                            let transport = "tcp".to_string();
+                            let port = if url.starts_with("https://") { 443 } else { 80 };
+                            let p_spec = rdb::PortSpec { transport, port, state: "open".into(), reason: Some("connect".into()), service_name: None, confidence: 1.0, first_seen_ms: started_ms as i64, last_seen_ms: started_ms as i64 };
+                            let port_id = dbh.upsert_port(host_id, &p_spec)?;
+                            // endpoint
+                            let scheme = if url.starts_with("https://") { "https" } else { "http" } .to_string();
+                            let parsed = url::Url::parse(url).ok();
+                            let authority = parsed.as_ref().map(|u| u.host_str().unwrap_or("").to_string()).unwrap_or_default();
+                            let path = parsed.as_ref().map(|u| u.path().to_string()).unwrap_or("/".to_string());
+                            let h2 = false;
+                            let content_type = None;
+                            let favicon_hash = v.get("favicon_mmh3").and_then(|x| x.as_i64()).map(|i| i.to_string());
+                            let fps = v.get("fingerprints").and_then(|x| x.as_array()).map(|arr| serde_json::to_string(arr).ok()).flatten();
+                            let http = rdb::HttpEndpoint { scheme, authority, path, status, h2, server_header: server, content_type, favicon_hash, tech_tags_json: fps, tls_ja3: None, tls_ja3s: None, tls_chain_json: None, collected_ms };
+                            dbh.add_http_endpoint(port_id, &http)?;
+                            host_set.insert(target.to_string());
+                        } else if v.get("open").is_some() {
+                            // aggregated scan result
+                            let target = v.get("target").and_then(|x| x.as_str()).unwrap_or("");
+                            let host_id = dbh.upsert_host(&run_id, target, None)?;
+                            if let Some(ports) = v.get("open").and_then(|x| x.as_array()) {
+                                for p in ports { if let Some(port) = p.as_i64() {
+                                    let spec = rdb::PortSpec { transport: "tcp".into(), port: port as u16, state: "open".into(), reason: Some("connect".into()), service_name: None, confidence: 1.0, first_seen_ms: 0, last_seen_ms: 0 };
+                                    let _ = dbh.upsert_port(host_id, &spec)?;
+                                }}
+                            }
+                            host_set.insert(target.to_string());
+                        } else {
+                            err_count += 1;
+                        }
+                    }
+                    let finished_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+                    dbh.finish_run(&run_id, finished_at, host_set.len() as i64, err_count)?;
+                }
+                ResultsCmd::Export { db, table, format, out } => {
+                    use results_sqlite as rdb;
+                    let dbh = rdb::Db::open_or_create(&db)?;
+                    let mut stmt = dbh.conn.prepare(&format!("SELECT * FROM {}", table))?;
+                    let cols = stmt.column_names().iter().map(|s| s.to_string()).collect::<Vec<_>>();
+                    let mut rows = stmt.query([])?;
+                    match format.as_str() {
+                        "csv" => {
+                            let mut wtr = csv::Writer::from_writer(std::fs::File::create(&out)?);
+                            wtr.write_record(cols.clone())?;
+                            while let Some(row) = rows.next()? {
+                                let mut rec = Vec::with_capacity(cols.len());
+                                for i in 0..cols.len() { rec.push(row.get_ref(i)?.as_str().unwrap_or("").to_string()); }
+                                wtr.write_record(rec)?;
+                            }
+                            wtr.flush()?;
+                        }
+                        _ => {
+                            let mut w = std::io::BufWriter::new(std::fs::File::create(&out)?);
+                            use std::io::Write;
+                            while let Some(row) = rows.next()? {
+                                let mut obj = serde_json::Map::new();
+                                for (i, name) in cols.iter().enumerate() {
+                                    let v = row.get_ref(i)?;
+                                    let s = v.as_str().unwrap_or("");
+                                    obj.insert(name.clone(), serde_json::Value::String(s.to_string()));
+                                }
+                                writeln!(w, "{}", serde_json::Value::Object(obj).to_string())?;
+                            }
+                        }
+                    }
+                }
+                ResultsCmd::Query { db, sql, format, out } => {
+                    use results_sqlite as rdb;
+                    let dbh = rdb::Db::open_or_create(&db)?;
+                    let mut stmt = dbh.conn.prepare(&sql)?;
+                    let cols = stmt.column_names().iter().map(|s| s.to_string()).collect::<Vec<_>>();
+                    let mut rows = stmt.query([])?;
+                    match (format.as_str(), out) {
+                        ("csv", Some(path)) => {
+                            let mut wtr = csv::Writer::from_writer(std::fs::File::create(path)?);
+                            wtr.write_record(cols.clone())?;
+                            while let Some(row) = rows.next()? {
+                                let mut rec = Vec::with_capacity(cols.len());
+                                for i in 0..cols.len() { rec.push(row.get_ref(i)?.as_str().unwrap_or("").to_string()); }
+                                wtr.write_record(rec)?;
+                            }
+                            wtr.flush()?;
+                        }
+                        ("jsonl", maybe_path) => {
+                            use std::io::Write;
+                            let mut writer: Box<dyn std::io::Write> = if let Some(p) = maybe_path { Box::new(std::io::BufWriter::new(std::fs::File::create(p)?)) } else { Box::new(std::io::BufWriter::new(std::io::stdout())) };
+                            while let Some(row) = rows.next()? {
+                                let mut obj = serde_json::Map::new();
+                                for (i, name) in cols.iter().enumerate() {
+                                    let s = row.get_ref(i)?.as_str().unwrap_or("");
+                                    obj.insert(name.clone(), serde_json::Value::String(s.to_string()));
+                                }
+                                writeln!(writer, "{}", serde_json::Value::Object(obj).to_string())?;
+                            }
+                        }
+                        _ => return Err(anyhow::anyhow!("unsupported format")),
+                    }
+                }
+            }
+        }
         #[cfg(feature = "forensics")]
         Commands::Forensics { cmd } => {
             match cmd {
@@ -363,7 +509,7 @@ fn main() -> Result<()> {
             }
         }
         #[cfg(feature = "webscan")]
-        Commands::WebScan { target, targets, ports, timeout_ms, redirects, concurrency, out, csv, no_favicon } => {
+        Commands::WebScan { target, targets, ports, timeout_ms, redirects, concurrency, out, csv, no_favicon, strict } => {
             let targets_list: Vec<String> = if let Some(t) = target {
                 vec![t]
             } else if let Some(path) = targets {
@@ -377,6 +523,7 @@ fn main() -> Result<()> {
             let opts = web_surface::WebProbeOptions { timeout_ms, redirects, user_agent: format!("toolbox/{}", env!("CARGO_PKG_VERSION")), fetch_favicon: !no_favicon };
             let rt = tokio::runtime::Runtime::new()?;
             let results = rt.block_on(async move { web_surface::probe_many(targets_list, ports_vec, opts, concurrency).await });
+            let failures = results.iter().filter(|r| r.error.is_some()).count();
             if let Some(path) = out.clone() {
                 if csv {
                     let mut wtr = csv::Writer::from_writer(std::fs::File::create(&path)?);
@@ -440,6 +587,10 @@ fn main() -> Result<()> {
                     });
                     println!("{}", serde_json::to_string(&obj)?);
                 }
+            }
+            if strict && failures > 0 {
+                eprintln!("web-scan: {} failures detected", failures);
+                return Err(anyhow::anyhow!(format!("{} failures", failures)));
             }
         }
         #[cfg(feature = "banner")]

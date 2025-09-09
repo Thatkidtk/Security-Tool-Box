@@ -19,8 +19,10 @@ udp-probe = { path = "../modules/udp-probe", package = "udp-probe", optional = t
 web-surface = { path = "../modules/web-surface", package = "web-surface", optional = true }
 forensics = { path = "../modules/forensics", package = "forensics", optional = true }
 credentials = { path = "../modules/credentials", package = "credentials", optional = true }
+results-sqlite = { path = "../crates/results-sqlite", package = "results-sqlite", optional = true }
 url = "2"
 time = { workspace = true }
+uuid = { version = "1", features = ["v7"] }
 
 [features]
 default = []
@@ -32,3 +34,4 @@ webscan = ["web-surface", "tokio", "port-scan"]
 forensics = ["dep:forensics"]
 udp = ["udp-probe", "tokio"]
 creds = ["dep:credentials"]
+results = ["dep:results-sqlite", "tokio"]

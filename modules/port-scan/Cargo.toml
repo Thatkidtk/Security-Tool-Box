@@ -7,3 +7,4 @@ edition = "2021"
 toolbox-core = { path = "../../core" }
 anyhow = { workspace = true }
 tokio = { workspace = true }
+rand = { workspace = true }

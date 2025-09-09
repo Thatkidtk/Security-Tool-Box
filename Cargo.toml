@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "core",
+    "crates/results-sqlite",
     "modules/port-scan",
     "modules/host-discovery",
     "modules/banners",

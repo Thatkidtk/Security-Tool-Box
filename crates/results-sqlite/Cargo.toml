@@ -1,0 +1,13 @@
+[package]
+name = "results-sqlite"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { version = "1", features = ["v4","v7","serde"] }
+time = { workspace = true }
+
