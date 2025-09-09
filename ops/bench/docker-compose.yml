@@ -1,0 +1,26 @@
+version: "3.9"
+services:
+  web_nginx:
+    image: nginx:1.27-alpine
+    ports: ["8080:80"]
+  web_caddy_h2:
+    image: caddy:2
+    ports: ["8443:443"]
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+  ssh:
+    image: lscr.io/linuxserver/openssh-server:latest
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - PASSWORD_ACCESS=true
+      - USER_NAME=tester
+      - USER_PASSWORD=secret123
+    ports: ["2222:2222"]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: example
+    ports: ["5432:5432"]
+

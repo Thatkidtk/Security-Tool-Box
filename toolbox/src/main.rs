@@ -20,6 +20,40 @@ fn now_rfc3339() -> String {
     OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_else(|_| String::new())
 }
 
+fn sh(cmd: &str, args: &[&str]) -> anyhow::Result<()> {
+    let status = std::process::Command::new(cmd).args(args).status()?;
+    if !status.success() { return Err(anyhow::anyhow!(format!("{cmd} {:?} failed with {status}", args))); }
+    Ok(())
+}
+
+fn count_lines(p: &std::path::Path) -> anyhow::Result<u64> {
+    use std::io::BufRead;
+    let f = std::fs::File::open(p)?;
+    Ok(std::io::BufReader::new(f).lines().count() as u64)
+}
+
+fn rss_mb() -> f32 {
+    #[cfg(target_os="linux")]
+    {
+        use std::fs;
+        if let Ok(statm) = fs::read_to_string("/proc/self/statm") {
+            let mut it = statm.split_whitespace();
+            let _size = it.next();
+            if let Some(resident_pages) = it.next() {
+                let pages: f32 = resident_pages.parse().unwrap_or(0.0);
+                let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as f32 };
+                return (pages * page_size) / (1024.0 * 1024.0);
+            }
+        }
+    }
+    0.0
+}
+
+fn git_sha() -> anyhow::Result<String> {
+    let out = std::process::Command::new("git").args(["rev-parse","--short","HEAD"]).output()?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum OutputFormat { Text, Json, Jsonl }
 
@@ -134,6 +168,21 @@ enum Commands {
         /// Delay between DNS retries in milliseconds
         #[arg(long, default_value_t = 200)]
         dns_retry_delay_ms: u64,
+    },
+    /// Run local benchmark suite and emit JSONL metrics
+    Bench {
+        /// Run docker compose up -d before benchmarking
+        #[arg(long, default_value_t = false)]
+        compose_up: bool,
+        /// QPS to use for scans
+        #[arg(long, default_value_t = 500)]
+        qps: u32,
+        /// Output directory for artifacts (JSONL/Parquet/DB)
+        #[arg(long, default_value = "target/bench")]
+        out: String,
+        /// Import into results DB and export Parquet
+        #[arg(long, default_value_t = false)]
+        store: bool,
     },
     /// Discover live hosts via TCP connect sweep
     #[cfg(feature = "discover")]
@@ -968,6 +1017,66 @@ fn main() -> Result<()> {
                         for ip in &live { println!("{}", serde_json::json!({"host": ip})); }
                     }
                 }
+            }
+        }
+        Commands::Bench { compose_up, qps, out, store } => {
+            let out_dir = std::path::PathBuf::from(&out);
+            std::fs::create_dir_all(&out_dir).ok();
+            if compose_up {
+                sh("docker", &["compose","-f","ops/bench/docker-compose.yml","up","-d"])?;
+            }
+            // host list
+            let hostfile = out_dir.join("hosts.txt");
+            std::fs::write(&hostfile, "127.0.0.1\n::1\n")?;
+
+            // Web-scan phase
+            let web_jsonl = out_dir.join("web.jsonl");
+            let t0 = Instant::now();
+            let rss0 = rss_mb();
+            sh("cargo", &["run","-q","-p","toolbox","--features","webscan","--","web-scan","--targets", hostfile.to_str().unwrap(), "--ports","8080,8443","--qps", &qps.to_string(), "--out", web_jsonl.to_str().unwrap(), "--strict"])?;
+            let wall_web = t0.elapsed().as_millis();
+            let web_rows = count_lines(&web_jsonl)?;
+            let web_rss = (rss_mb() - rss0).max(0.0);
+            println!("{}", serde_json::json!({
+                "type":"bench.meta",
+                "tool_version": env!("CARGO_PKG_VERSION"),
+                "git_sha": git_sha().ok(),
+                "qps": qps
+            }).to_string());
+            println!("{}", serde_json::json!({
+                "type":"bench.result",
+                "phase":"web-scan",
+                "targets": 2,
+                "ok_rows": web_rows,
+                "cpu_pct": serde_json::Value::Null,
+                "rss_mb": web_rss,
+                "wall_ms": wall_web,
+            }).to_string());
+
+            // TCP scan phase
+            let scan_jsonl = out_dir.join("scan.jsonl");
+            let t1 = Instant::now();
+            let rss1 = rss_mb();
+            sh("cargo", &["run","-q","-p","toolbox","--features","scan","--","scan","--targets", hostfile.to_str().unwrap(), "--ports","22,2222,5432", "--qps", &qps.to_string(), "--out", scan_jsonl.to_str().unwrap()])?;
+            let wall_scan = t1.elapsed().as_millis();
+            let scan_rows = count_lines(&scan_jsonl)?;
+            let scan_rss = (rss_mb() - rss1).max(0.0);
+            println!("{}", serde_json::json!({
+                "type":"bench.result",
+                "phase":"scan",
+                "targets": 3,
+                "ok_rows": scan_rows,
+                "cpu_pct": serde_json::Value::Null,
+                "rss_mb": scan_rss,
+                "wall_ms": wall_scan,
+            }).to_string());
+
+            if store {
+                let db = out_dir.join("results.db");
+                sh("cargo", &["run","-q","-p","toolbox","--features","results","--","results","import","--db", db.to_str().unwrap(), "--from", web_jsonl.to_str().unwrap()])?;
+                sh("cargo", &["run","-q","-p","toolbox","--features","results","--","results","import","--db", db.to_str().unwrap(), "--from", scan_jsonl.to_str().unwrap()])?;
+                sh("cargo", &["run","-q","-p","toolbox","--features","results","--","results","export","--db", db.to_str().unwrap(), "--table","http_endpoints","--format","parquet","--out", out_dir.join("http_endpoints.parquet").to_str().unwrap()])?;
+                sh("cargo", &["run","-q","-p","toolbox","--features","results","--","results","export","--db", db.to_str().unwrap(), "--table","ports","--format","parquet","--out", out_dir.join("ports.parquet").to_str().unwrap()])?;
             }
         }
     }

@@ -22,6 +22,7 @@ credentials = { path = "../modules/credentials", package = "credentials", option
 results-sqlite = { path = "../crates/results-sqlite", package = "results-sqlite", optional = true }
 url = "2"
 time = { workspace = true }
+libc = "0.2"
 uuid = { version = "1", features = ["v7"] }
 
 [features]

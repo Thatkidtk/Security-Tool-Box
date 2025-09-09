@@ -1,0 +1,4 @@
+:443 {
+  respond "hi h2" 200
+  tls internal
+}
