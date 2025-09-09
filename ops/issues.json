@@ -1,0 +1,42 @@
+[
+  {
+    "title": "Web fingerprints: expand rules and favicon hashing",
+    "labels": ["enhancement"],
+    "body": "Expand header/meta/body rules, add optional favicon hashing (e.g., mmh3) and emit structured tags in web-scan output."
+  },
+  {
+    "title": "Scan: add host-level concurrency with global QPS",
+    "labels": ["enhancement"],
+    "body": "Introduce --host-concurrency and validate global token-bucket QPS across all hosts/ports."
+  },
+  {
+    "title": "UDP: SNMP sysName/sysObjectID, DNS version.bind, NTP refid",
+    "labels": ["enhancement"],
+    "body": "Extend udp-probe to query additional lightweight fields and parse responses into JSON."
+  },
+  {
+    "title": "Banner: --max-redirects and TLS handshake timeout",
+    "labels": ["enhancement"],
+    "body": "Expose redirect hop limit and handshake timeout for HTTP/HTTPS banner grabbing."
+  },
+  {
+    "title": "Forensics: add PCAP detect, SHA1, entropy, CSV export",
+    "labels": ["enhancement"],
+    "body": "Improve forensics hashing and type detection; compute Shannon entropy and support CSV output."
+  },
+  {
+    "title": "Credentials: add htpasswd + NetNTLMv2 parsing and crack templates",
+    "labels": ["enhancement"],
+    "body": "Detect common container formats and provide ready-made hashcat/john mode templates with JSON results."
+  },
+  {
+    "title": "Docs: expand README with full CLI reference",
+    "labels": ["docs"],
+    "body": "Add end-to-end examples for scan/discover/web-scan/banner/udp/forensics/creds."
+  },
+  {
+    "title": "Chore: clean warnings across feature builds",
+    "labels": ["chore"],
+    "body": "Remove unused imports and gate helpers to achieve clean builds for narrow feature sets."
+  }
+]
