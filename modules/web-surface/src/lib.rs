@@ -12,6 +12,7 @@ pub struct WebProbeOptions {
     pub timeout_ms: u64,
     pub redirects: usize,
     pub user_agent: String,
+    pub fetch_favicon: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -49,8 +50,9 @@ pub async fn probe_many(targets: Vec<String>, ports: Vec<u16>, opts: WebProbeOpt
             let permit = sem.clone().acquire_owned().await.unwrap();
             let client = client.clone();
             let host = t.clone();
+            let fetch_favicon = opts.fetch_favicon;
             handles.push(tokio::spawn(async move {
-                let r = probe_one(&client, host.clone(), p).await;
+                let r = probe_one(&client, host.clone(), p, fetch_favicon).await;
                 drop(permit);
                 r
             }));
@@ -61,7 +63,7 @@ pub async fn probe_many(targets: Vec<String>, ports: Vec<u16>, opts: WebProbeOpt
     out
 }
 
-async fn probe_one(client: &Client, host: String, port: u16) -> WebResult {
+async fn probe_one(client: &Client, host: String, port: u16, fetch_favicon: bool) -> WebResult {
     let mut schemes = Vec::new();
     if port == 443 || port == 8443 || port == 9443 { schemes.push("https"); }
     if port == 80 || port == 8080 || port == 8000 { schemes.push("http"); }
@@ -79,10 +81,7 @@ async fn probe_one(client: &Client, host: String, port: u16) -> WebResult {
                     Err(_) => (None, Vec::new()),
                 };
                 // Try favicon hash
-                let (fav_url, fav_hash) = match fetch_favicon_hash(client, &final_url).await {
-                    Ok(v) => v,
-                    Err(_) => (None, None),
-                };
+                let (fav_url, fav_hash) = if fetch_favicon { match fetch_favicon_hash(client, &final_url).await { Ok(v) => v, Err(_) => (None, None) } } else { (None, None) };
                 let duration_ms = started.elapsed().as_millis();
                 let ended_at = OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
                 return WebResult { target: host, url, final_url, status: Some(status), server, title, fingerprints: fps, started_at, ended_at, duration_ms, favicon_url: fav_url, favicon_mmh3: fav_hash, error: None };
@@ -156,12 +155,29 @@ fn compute_fingerprints(headers: &HeaderMap, title: Option<&str>, body: &str) ->
         if l.contains("cloudflare") { fps.push("cdn:cloudflare".into()); }
         if l.contains("caddy") { fps.push("server:caddy".into()); }
     }
+    // Set-Cookie hints
+    for val in headers.get_all(reqwest::header::SET_COOKIE).iter() {
+        if let Ok(s) = val.to_str() {
+            let l = s.to_lowercase();
+            if l.contains("wordpress") || l.contains("wp-") { fps.push("cms:wordpress".into()); }
+            if l.contains("drupal") || l.contains("sess") && l.contains("drupal") { fps.push("cms:drupal".into()); }
+            if l.contains("grafana_session") { fps.push("product:grafana".into()); }
+            if l.contains("laravel_session") { fps.push("framework:laravel".into()); }
+            if l.contains("kbn-name") || l.contains("kbn-xsrf") { fps.push("product:kibana".into()); }
+        }
+    }
     if let Some(v) = headers.get("x-powered-by").and_then(|v| v.to_str().ok()) {
         let l = v.to_lowercase();
         if l.contains("php") { fps.push("lang:php".into()); }
         if l.contains("express") { fps.push("framework:express".into()); }
         if l.contains("asp.net") { fps.push("framework:aspnet".into()); }
         if l.contains("django") { fps.push("framework:django".into()); }
+    }
+    if let Some(v) = headers.get("x-generator").and_then(|v| v.to_str().ok()) {
+        let l = v.to_lowercase();
+        if l.contains("wordpress") { fps.push("cms:wordpress".into()); }
+        if l.contains("joomla") { fps.push("cms:joomla".into()); }
+        if l.contains("drupal") { fps.push("cms:drupal".into()); }
     }
     if headers.get("x-jenkins").is_some() { fps.push("product:jenkins".into()); }
     if headers.get("x-drupal-cache").is_some() { fps.push("cms:drupal".into()); }
@@ -190,6 +206,8 @@ fn compute_fingerprints(headers: &HeaderMap, title: Option<&str>, body: &str) ->
     if bl.contains("react-dom") || bl.contains("data-reactroot") { fps.push("js:react".into()); }
     if bl.contains("__next_data__") { fps.push("framework:nextjs".into()); }
     if bl.contains("window._nuxt") { fps.push("framework:nuxt".into()); }
+    if bl.contains("content=\"joomla! - open source") { fps.push("cms:joomla".into()); }
+    if bl.contains("content=\"drupal") { fps.push("cms:drupal".into()); }
     fps.sort();
     fps.dedup();
     fps

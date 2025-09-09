@@ -228,6 +228,12 @@ enum Commands {
         /// Output file (JSONL). Stdout if omitted.
         #[arg(long, value_name = "FILE")]
         out: Option<PathBuf>,
+        /// Write CSV instead of JSONL when --out is provided
+        #[arg(long, default_value_t = false)]
+        csv: bool,
+        /// Disable favicon fetching/hash
+        #[arg(long, default_value_t = false)]
+        no_favicon: bool,
     },
     /// Forensics utilities: hash and identify files
     #[cfg(feature = "forensics")]
@@ -357,7 +363,7 @@ fn main() -> Result<()> {
             }
         }
         #[cfg(feature = "webscan")]
-        Commands::WebScan { target, targets, ports, timeout_ms, redirects, concurrency, out } => {
+        Commands::WebScan { target, targets, ports, timeout_ms, redirects, concurrency, out, csv, no_favicon } => {
             let targets_list: Vec<String> = if let Some(t) = target {
                 vec![t]
             } else if let Some(path) = targets {
@@ -368,29 +374,52 @@ fn main() -> Result<()> {
             } else { vec![] };
             if targets_list.is_empty() { return Err(anyhow::anyhow!("provide a target or --targets <file>")); }
             let ports_vec = modules_port_parse(&ports)?;
-            let opts = web_surface::WebProbeOptions { timeout_ms, redirects, user_agent: format!("toolbox/{}", env!("CARGO_PKG_VERSION")) };
+            let opts = web_surface::WebProbeOptions { timeout_ms, redirects, user_agent: format!("toolbox/{}", env!("CARGO_PKG_VERSION")), fetch_favicon: !no_favicon };
             let rt = tokio::runtime::Runtime::new()?;
             let results = rt.block_on(async move { web_surface::probe_many(targets_list, ports_vec, opts, concurrency).await });
-            if let Some(path) = out {
-                let mut w = std::io::BufWriter::new(std::fs::File::create(&path)?);
-                for r in results {
-                    let obj = serde_json::json!({
-                        "target": r.target,
-                        "url": r.url,
-                        "final_url": r.final_url,
-                        "status": r.status,
-                        "server": r.server,
-                        "title": r.title,
-                        "fingerprints": r.fingerprints,
-                        "started_at": r.started_at,
-                        "ended_at": r.ended_at,
-                        "duration_ms": r.duration_ms,
-                        "favicon_url": r.favicon_url,
-                        "favicon_mmh3": r.favicon_mmh3,
-                        "error": r.error,
-                    });
-                    use std::io::Write;
-                    writeln!(w, "{}", serde_json::to_string(&obj)?)?;
+            if let Some(path) = out.clone() {
+                if csv {
+                    let mut wtr = csv::Writer::from_writer(std::fs::File::create(&path)?);
+                    wtr.write_record(["target","url","final_url","status","server","title","fingerprints","favicon_mmh3","duration_ms","started_at","ended_at","error"]) ?;
+                    for r in results {
+                        let fps = if r.fingerprints.is_empty() { String::new() } else { r.fingerprints.join("|") };
+                        wtr.write_record([
+                            r.target,
+                            r.url,
+                            r.final_url,
+                            r.status.map(|v| v.to_string()).unwrap_or_default(),
+                            r.server.unwrap_or_default(),
+                            r.title.unwrap_or_default(),
+                            fps,
+                            r.favicon_mmh3.map(|v| v.to_string()).unwrap_or_default(),
+                            r.duration_ms.to_string(),
+                            r.started_at,
+                            r.ended_at,
+                            r.error.unwrap_or_default(),
+                        ])?;
+                    }
+                    wtr.flush()?;
+                } else {
+                    let mut w = std::io::BufWriter::new(std::fs::File::create(&path)?);
+                    for r in results {
+                        let obj = serde_json::json!({
+                            "target": r.target,
+                            "url": r.url,
+                            "final_url": r.final_url,
+                            "status": r.status,
+                            "server": r.server,
+                            "title": r.title,
+                            "fingerprints": r.fingerprints,
+                            "started_at": r.started_at,
+                            "ended_at": r.ended_at,
+                            "duration_ms": r.duration_ms,
+                            "favicon_url": r.favicon_url,
+                            "favicon_mmh3": r.favicon_mmh3,
+                            "error": r.error,
+                        });
+                        use std::io::Write;
+                        writeln!(w, "{}", serde_json::to_string(&obj)?)?;
+                    }
                 }
             } else {
                 for r in results {

@@ -1,0 +1,44 @@
+name: Bootstrap Projects v2
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Project title
+        required: false
+        default: Roadmap v2
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PROJECTS_TOKEN }}
+    steps:
+      - name: Ensure gh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh jq
+      - name: Create Projects v2 for viewer
+        id: create_project
+        run: |
+          set -euo pipefail
+          TITLE="${{ github.event.inputs.title }}"
+          if [ -z "$TITLE" ]; then TITLE="Roadmap v2"; fi
+          VIEWER_ID=$(gh api graphql -f query='query { viewer { id login } }' | jq -r '.data.viewer.id')
+          CREATE=$(gh api graphql -f query='mutation($owner:ID!,$title:String!){ createProjectV2(input:{ownerId:$owner,title:$title}){ projectV2 { id title } } }' -F owner=$VIEWER_ID -F title="$TITLE")
+          echo "$CREATE" | jq '.'
+          PID=$(echo "$CREATE" | jq -r '.data.createProjectV2.projectV2.id')
+          echo "project_id=$PID" >> $GITHUB_OUTPUT
+      - name: Add open issues to project
+        if: steps.create_project.outputs.project_id != ''
+        run: |
+          set -euo pipefail
+          PID="${{ steps.create_project.outputs.project_id }}"
+          gh issue list --limit 200 --json id,number | jq -c '.[]' | while read -r row; do
+            IID=$(echo "$row" | jq -r '.id')
+            gh api graphql -f query='mutation($project:ID!,$item:ID!){ addProjectV2ItemById(input:{projectId:$project,contentId:$item}){ item { id } } }' -F project=$PID -F item=$IID >/dev/null || true
+          done
+      - name: Output project URL (manual step)
+        run: |
+          echo "Projects v2 created for your user. Visit https://github.com/users/${{ github.actor }}/projects to view."
+
