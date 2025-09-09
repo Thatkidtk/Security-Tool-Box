@@ -36,6 +36,24 @@ enum ForensicsCmd {
     Identify { files: Vec<PathBuf> },
 }
 
+#[cfg(feature = "creds")]
+#[derive(Debug, Subcommand)]
+enum CredsCmd {
+    /// Detect hash kinds for input string(s) or a file
+    Detect {
+        /// Hash string(s)
+        #[arg(long)]
+        hash: Vec<String>,
+        /// File with newline-delimited hashes
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Wordlist stats (total and unique)
+    Wordlist {
+        file: PathBuf,
+    },
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "toolbox", version, about = "Unified Offensive Security Toolbox (scaffold)")]
 struct Cli {
@@ -202,6 +220,12 @@ enum Commands {
         #[command(subcommand)]
         cmd: ForensicsCmd,
     },
+    /// Credentials utilities
+    #[cfg(feature = "creds")]
+    Creds {
+        #[command(subcommand)]
+        cmd: CredsCmd,
+    },
     /// UDP probe for common services (dns, ntp)
     #[cfg(feature = "udp")]
     UdpProbe {
@@ -231,6 +255,29 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Version => {
             println!("toolbox {} (core {})", env!("CARGO_PKG_VERSION"), toolbox_core::version());
+        }
+        #[cfg(feature = "creds")]
+        Commands::Creds { cmd } => {
+            match cmd {
+                CredsCmd::Detect { hash, file } => {
+                    let mut inputs = hash.clone();
+                    if let Some(p) = file {
+                        let s = std::fs::read_to_string(&p)?;
+                        inputs.extend(s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()));
+                    }
+                    for h in inputs {
+                        let kind = credentials::detect_hash(&h);
+                        let obj = serde_json::json!({ "hash": h, "kind": format!("{:?}", kind) });
+                        println!("{}", serde_json::to_string(&obj)?);
+                    }
+                }
+                CredsCmd::Wordlist { file } => {
+                    let s = std::fs::read_to_string(&file)?;
+                    let (total, unique) = credentials::wordlist_stats(&s);
+                    let obj = serde_json::json!({ "file": file, "total": total, "unique": unique });
+                    println!("{}", serde_json::to_string(&obj)?);
+                }
+            }
         }
         #[cfg(feature = "forensics")]
         Commands::Forensics { cmd } => {

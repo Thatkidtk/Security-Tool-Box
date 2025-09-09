@@ -18,6 +18,7 @@ banners = { path = "../modules/banners", package = "banners", optional = true }
 udp-probe = { path = "../modules/udp-probe", package = "udp-probe", optional = true }
 web-surface = { path = "../modules/web-surface", package = "web-surface", optional = true }
 forensics = { path = "../modules/forensics", package = "forensics", optional = true }
+credentials = { path = "../modules/credentials", package = "credentials", optional = true }
 url = "2"
 time = { workspace = true }
 
@@ -30,3 +31,4 @@ web = ["banners", "port-scan", "tokio"]
 webscan = ["web-surface", "tokio", "port-scan"]
 forensics = ["dep:forensics"]
 udp = ["udp-probe", "tokio"]
+creds = ["dep:credentials"]
