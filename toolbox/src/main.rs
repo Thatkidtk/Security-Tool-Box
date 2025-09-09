@@ -48,6 +48,21 @@ enum CredsCmd {
         #[arg(long)]
         file: Option<PathBuf>,
     },
+    /// Orchestrate external cracking tool (hashcat/john). Streams tool output.
+    Crack {
+        /// Tool name (e.g., hashcat or john)
+        #[arg(long)]
+        tool: String,
+        /// Path to hashes file
+        #[arg(long)]
+        hashes: PathBuf,
+        /// Path to wordlist file (optional)
+        #[arg(long)]
+        wordlist: Option<PathBuf>,
+        /// Extra arguments passed to the tool (quoted)
+        #[arg(long)]
+        args: Option<String>,
+    },
     /// Wordlist stats (total and unique)
     Wordlist {
         file: PathBuf,
@@ -277,6 +292,42 @@ fn main() -> Result<()> {
                     let obj = serde_json::json!({ "file": file, "total": total, "unique": unique });
                     println!("{}", serde_json::to_string(&obj)?);
                 }
+                CredsCmd::Crack { tool, hashes, wordlist, args } => {
+                    use std::process::{Command, Stdio};
+                    use std::io::BufRead;
+                    let mut cmd = Command::new(&tool);
+                    // Basic sensible defaults if none provided
+                    if let Some(a) = args {
+                        for tok in a.split_whitespace() { cmd.arg(tok); }
+                    }
+                    cmd.arg(hashes);
+                    if let Some(wl) = wordlist { cmd.arg(wl); }
+                    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+                    let mut child = cmd.spawn().map_err(|e| anyhow::anyhow!(format!("failed to spawn {}: {}", tool, e)))?;
+                    let stdout = child.stdout.take();
+                    let stderr = child.stderr.take();
+                    // Stream outputs
+                    if let Some(out) = stdout {
+                        let mut br = std::io::BufReader::new(out);
+                        let mut line = String::new();
+                        while br.read_line(&mut line).unwrap_or(0) > 0 {
+                            print!("{}", line);
+                            line.clear();
+                        }
+                    }
+                    if let Some(err) = stderr {
+                        let mut br = std::io::BufReader::new(err);
+                        let mut line = String::new();
+                        while br.read_line(&mut line).unwrap_or(0) > 0 {
+                            eprint!("{}", line);
+                            line.clear();
+                        }
+                    }
+                    let status = child.wait()?;
+                    if !status.success() {
+                        return Err(anyhow::anyhow!(format!("{} exited with status {}", tool, status)));
+                    }
+                }
             }
         }
         #[cfg(feature = "forensics")]
@@ -331,6 +382,9 @@ fn main() -> Result<()> {
                         "server": r.server,
                         "title": r.title,
                         "fingerprints": r.fingerprints,
+                        "started_at": r.started_at,
+                        "ended_at": r.ended_at,
+                        "duration_ms": r.duration_ms,
                         "error": r.error,
                     });
                     use std::io::Write;
@@ -346,6 +400,9 @@ fn main() -> Result<()> {
                         "server": r.server,
                         "title": r.title,
                         "fingerprints": r.fingerprints,
+                        "started_at": r.started_at,
+                        "ended_at": r.ended_at,
+                        "duration_ms": r.duration_ms,
                         "error": r.error,
                     });
                     println!("{}", serde_json::to_string(&obj)?);

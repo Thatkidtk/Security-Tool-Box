@@ -2,7 +2,8 @@ use anyhow::Result;
 use reqwest::{Client, redirect::Policy, header::HeaderMap};
 use std::time::Duration;
 use tokio::sync::Semaphore;
-use url::Url;
+// use url::Url; // not used currently
+use time::OffsetDateTime;
 
 #[derive(Debug, Clone)]
 pub struct WebProbeOptions {
@@ -20,6 +21,9 @@ pub struct WebResult {
     pub server: Option<String>,
     pub title: Option<String>,
     pub fingerprints: Vec<String>,
+    pub started_at: String,
+    pub ended_at: String,
+    pub duration_ms: u128,
     pub error: Option<String>,
 }
 
@@ -61,6 +65,8 @@ async fn probe_one(client: &Client, host: String, port: u16) -> WebResult {
 
     for scheme in schemes {
         let url = format!("{}://{}:{}", scheme, host, port);
+        let started = std::time::Instant::now();
+        let started_at = OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
         match fetch_head(client, &url).await {
             Ok((final_url, status, server)) => {
                 // Try small GET for title + fingerprints
@@ -68,17 +74,23 @@ async fn probe_one(client: &Client, host: String, port: u16) -> WebResult {
                     Ok((t, f)) => (t, f),
                     Err(_) => (None, Vec::new()),
                 };
-                return WebResult { target: host, url, final_url, status: Some(status), server, title, fingerprints: fps, error: None };
+                let duration_ms = started.elapsed().as_millis();
+                let ended_at = OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
+                return WebResult { target: host, url, final_url, status: Some(status), server, title, fingerprints: fps, started_at, ended_at, duration_ms, error: None };
             }
             Err(e) => {
                 // Try next scheme
                 if scheme == "http" {
-                    return WebResult { target: host, url: url.clone(), final_url: url.clone(), status: None, server: None, title: None, fingerprints: Vec::new(), error: Some(e.to_string()) };
+                    let duration_ms = started.elapsed().as_millis();
+                    let ended_at = OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
+                    return WebResult { target: host, url: url.clone(), final_url: url.clone(), status: None, server: None, title: None, fingerprints: Vec::new(), started_at, ended_at, duration_ms, error: Some(e.to_string()) };
                 }
             }
         }
     }
-    WebResult { target: host.clone(), url: format!("https://{}:{}", host, port), final_url: format!("https://{}:{}", host, port), status: None, server: None, title: None, fingerprints: Vec::new(), error: Some("unreachable".into()) }
+    let started_at = OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
+    let ended_at = started_at.clone();
+    WebResult { target: host.clone(), url: format!("https://{}:{}", host, port), final_url: format!("https://{}:{}", host, port), status: None, server: None, title: None, fingerprints: Vec::new(), started_at, ended_at, duration_ms: 0, error: Some("unreachable".into()) }
 }
 
 async fn fetch_head(client: &Client, url: &str) -> Result<(String, u16, Option<String>)> {
@@ -154,6 +166,13 @@ fn compute_fingerprints(headers: &HeaderMap, title: Option<&str>, body: &str) ->
         if t.contains("jenkins") { fps.push("product:jenkins".into()); }
     }
     // Body hints (cheap substring checks)
+    // meta generator
+    if let Some(gen) = extract_meta_generator(body) {
+        let gl = gen.to_lowercase();
+        if gl.contains("wordpress") { fps.push("cms:wordpress".into()); }
+        if gl.contains("joomla") { fps.push("cms:joomla".into()); }
+        if gl.contains("drupal") { fps.push("cms:drupal".into()); }
+    }
     let bl = body.to_lowercase();
     if bl.contains("wp-content/") { fps.push("cms:wordpress".into()); }
     if bl.contains("joomla!") { fps.push("cms:joomla".into()); }
@@ -165,4 +184,26 @@ fn compute_fingerprints(headers: &HeaderMap, title: Option<&str>, body: &str) ->
     fps.sort();
     fps.dedup();
     fps
+}
+
+fn extract_meta_generator(body: &str) -> Option<String> {
+    // Very simple parser for <meta name="generator" content="...">
+    let mut low = body.to_lowercase();
+    if let Some(i) = low.find("<meta") {
+        // scan a chunk around it
+        let end = (i + 4096).min(low.len());
+        let chunk = &body[i..end];
+        // search naive patterns
+        if chunk.to_lowercase().contains("name=\"generator\"") {
+            // find content attribute
+            if let Some(ci) = chunk.to_lowercase().find("content=") {
+                let rest = &chunk[ci+8..];
+                let quote = rest.chars().next()?;
+                if quote == '"' || quote == '\'' {
+                    if let Some(endq) = rest[1..].find(quote) { return Some(rest[1..1+endq].to_string()); }
+                }
+            }
+        }
+    }
+    None
 }

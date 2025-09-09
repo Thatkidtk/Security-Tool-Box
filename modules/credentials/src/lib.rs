@@ -6,10 +6,15 @@ pub enum HashKind {
     SHA1,
     SHA256,
     SHA512,
+    APR1,
+    SHA1_CRYPT,
+    SHA256_CRYPT,
+    SHA512_CRYPT,
     NTLM,
     Bcrypt,
     Argon2,
     SSHA,
+    NetNTLMv2,
     Unknown,
 }
 
@@ -18,6 +23,21 @@ pub fn detect_hash(s: &str) -> HashKind {
     if t.starts_with("$2a$") || t.starts_with("$2b$") || t.starts_with("$2y$") { return HashKind::Bcrypt; }
     if t.starts_with("$argon2i$") || t.starts_with("$argon2id$") || t.starts_with("$argon2d$") { return HashKind::Argon2; }
     if t.starts_with("{SSHA}") { return HashKind::SSHA; }
+    if t.starts_with("$apr1$") { return HashKind::APR1; }
+    if t.starts_with("$1$") { return HashKind::SHA1_CRYPT; }
+    if t.starts_with("$5$") { return HashKind::SHA256_CRYPT; }
+    if t.starts_with("$6$") { return HashKind::SHA512_CRYPT; }
+    if t.starts_with("{SHA}") { return HashKind::SHA1; }
+    // NetNTLMv2 typical format: user::DOMAIN:16-hex:32+hex:...
+    if t.contains("::") {
+        let parts: Vec<&str> = t.split(':').collect();
+        if parts.len() >= 5 {
+            let hexish = |s: &str| s.chars().all(|c| c.is_ascii_hexdigit());
+            if parts[2].len() >= 16 && hexish(parts[2]) && parts[3].len() >= 32 && hexish(parts[3]) {
+                return HashKind::NetNTLMv2;
+            }
+        }
+    }
     // NTLM: 32 hex uppercase typically, allow lowercase
     let re_ntlm = Regex::new(r"^(?i)[a-f0-9]{32}$").unwrap();
     if re_ntlm.is_match(t) { return HashKind::NTLM; }
@@ -46,4 +66,3 @@ pub fn wordlist_stats(content: &str) -> (usize, usize) {
     }
     (total, set.len())
 }
-
