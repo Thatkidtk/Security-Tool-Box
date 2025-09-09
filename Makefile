@@ -17,3 +17,6 @@ lint:
 run:
 	cargo run -p toolbox --features scan -- scan 127.0.0.1
 
+.PHONY: dev
+dev:
+	cargo watch -x "clippy -- -D warnings" -x "test --all-features" -x "run -p toolbox --features scan -- scan 127.0.0.1 --top 50"

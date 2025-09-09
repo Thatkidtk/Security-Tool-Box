@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ScanResult",
+  "type": "object",
+  "properties": {
+    "target": { "type": "string" },
+    "scanned": { "type": "integer" },
+    "open": { "type": "array", "items": { "type": "integer" } },
+    "timeout_ms": { "type": "integer" },
+    "concurrency": { "type": "integer" },
+    "duration_ms": { "type": "integer" },
+    "started_at": { "type": "string" },
+    "ended_at": { "type": "string" }
+  },
+  "required": ["target","scanned","open","timeout_ms","concurrency","duration_ms"],
+  "additionalProperties": true
+}

@@ -14,6 +14,8 @@ impl From<&str> for Target {
     }
 }
 
+pub mod ratelimiter;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -23,4 +25,3 @@ mod tests {
         assert!(!version().is_empty());
     }
 }
-

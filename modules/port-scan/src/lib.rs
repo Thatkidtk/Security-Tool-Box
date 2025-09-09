@@ -9,6 +9,8 @@ use tokio::sync::mpsc;
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use toolbox_core::Target;
+use toolbox_core::ratelimiter::RateLimiter;
+use rand::{thread_rng, Rng};
 
 /// Parse a comma-separated list of ports/ranges (e.g., "22,80,443", "1-1024,8080").
 pub fn parse_ports(spec: &str) -> Result<Vec<u16>> {
@@ -59,7 +61,7 @@ pub async fn scan_connect_with_limits(
     per_host_concurrency: usize,
     dns_retries: u32,
     dns_retry_delay: Duration,
-    global_qps: Option<Arc<Semaphore>>,
+    global_qps: Option<Arc<RateLimiter>>,
     retries: u32,
     retry_delay: Duration,
     global_limit: Option<Arc<Semaphore>>,
@@ -76,17 +78,14 @@ pub async fn scan_connect_with_limits(
         let host = host.clone();
         let host_sem = host_sem.clone();
         let global = global_limit.clone();
-        let qps_sem = global_qps.clone();
+        let qps_rl = global_qps.clone();
         tokio::spawn(async move {
             let _host_permit = host_sem.acquire_owned().await.unwrap();
             let _global_permit = match global {
                 Some(g) => Some(g.acquire_owned().await.unwrap()),
                 None => None,
             };
-            if let Some(q) = qps_sem {
-                // Wait for a rate token
-                let _ = q.acquire_owned().await.unwrap();
-            }
+            if let Some(q) = qps_rl { q.acquire().await; }
             let addr = (host.as_str(), port);
             let mut attempts = 0;
             let mut opened = false;
@@ -94,7 +93,12 @@ pub async fn scan_connect_with_limits(
                 let result = timeout(timeout_per_port, TcpStream::connect(addr)).await;
                 if let Ok(Ok(_stream)) = result { opened = true; break; }
                 attempts += 1;
-                if attempts <= retries && retry_delay.as_millis() > 0 { tokio::time::sleep(retry_delay).await; }
+                if attempts <= retries {
+                    let base = retry_delay.as_millis() as u64;
+                    let exp = base.saturating_mul(1u64 << (attempts.min(6))); // cap growth
+                    let jitter = thread_rng().gen_range(0..(exp / 4 + 1));
+                    tokio::time::sleep(Duration::from_millis(exp + jitter)).await;
+                }
             }
             if opened { let _ = tx.send(port).await; }
         });

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WebScanResult",
+  "type": "object",
+  "properties": {
+    "target": { "type": "string" },
+    "url": { "type": "string" },
+    "final_url": { "type": "string" },
+    "status": { "type": ["integer","null"] },
+    "server": { "type": ["string","null"] },
+    "title": { "type": ["string","null"] },
+    "fingerprints": { "type": "array", "items": { "type": "string" } },
+    "favicon_url": { "type": ["string","null"] },
+    "favicon_mmh3": { "type": ["integer","null"] },
+    "started_at": { "type": "string" },
+    "ended_at": { "type": "string" },
+    "duration_ms": { "type": "integer" },
+    "error": { "type": ["string","null"] }
+  },
+  "required": ["target","url","final_url","duration_ms"],
+  "additionalProperties": true
+}

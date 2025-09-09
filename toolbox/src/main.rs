@@ -593,16 +593,7 @@ fn main() -> Result<()> {
                 let start = Instant::now();
                 let started_at = now_rfc3339();
                 let open = rt.block_on(async move {
-                    let global_qps = if qps == 0 { None } else {
-                        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
-                        let sem_bg = sem.clone();
-                        tokio::spawn(async move {
-                            let mut t = tokio::time::interval(std::time::Duration::from_millis((1000u32 / qps.max(1)) as u64));
-                            t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                            loop { t.tick().await; sem_bg.add_permits(1); }
-                        });
-                        Some(sem)
-                    };
+                    let global_qps = if qps == 0 { None } else { Some(std::sync::Arc::new(toolbox_core::ratelimiter::RateLimiter::new(qps))) };
                     port_scan::scan_connect_with_limits(
                         &target_for_scan,
                         &ports_for_scan,
@@ -685,19 +676,7 @@ fn main() -> Result<()> {
                 let timeout = std::time::Duration::from_millis(timeout_ms);
                 let dns_delay = std::time::Duration::from_millis(dns_retry_delay_ms);
                 // Global QPS token bucket (shared across all hosts)
-                let global_qps = if qps == 0 { None } else {
-                    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
-                    let sem_bg = sem.clone();
-                    std::thread::spawn(move || {
-                        let rt = tokio::runtime::Runtime::new().expect("rt");
-                        rt.block_on(async move {
-                            let mut t = tokio::time::interval(std::time::Duration::from_millis((1000u32 / qps.max(1)) as u64));
-                            t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                            loop { t.tick().await; sem_bg.add_permits(1); }
-                        });
-                    });
-                    Some(sem)
-                };
+                let global_qps = if qps == 0 { None } else { Some(std::sync::Arc::new(toolbox_core::ratelimiter::RateLimiter::new(qps))) };
 
                 // Channel for lines
                 let (tx, rx) = mpsc::unbounded_channel::<String>();
