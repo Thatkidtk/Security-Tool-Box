@@ -1,0 +1,35 @@
+[workspace]
+members = [
+    "core",
+    "modules/port-scan",
+    "modules/host-discovery",
+    "modules/banners",
+    "modules/udp-probe",
+    "modules/web-surface",
+    "modules/forensics",
+    "toolbox",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+authors = ["Contributors <contributors@example.com>"]
+rust-version = "1.74"
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread","macros","net","time","sync","io-util"], default-features = false }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+csv = "1"
+ipnet = "2"
+time = { version = "0.3", features = ["formatting"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls","http2","gzip","brotli","deflate","json"] }
+sha2 = "0.10"
+blake3 = "1"
+infer = "0.15"
+hex = "0.4"

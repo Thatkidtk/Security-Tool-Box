@@ -1,0 +1,12 @@
+[package]
+name = "forensics"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+blake3 = { workspace = true }
+infer = { workspace = true }
+hex = { workspace = true }
+

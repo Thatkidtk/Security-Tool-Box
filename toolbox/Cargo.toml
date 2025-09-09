@@ -1,0 +1,32 @@
+[package]
+name = "toolbox"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { workspace = true }
+anyhow = { workspace = true }
+toolbox-core = { path = "../core" }
+port-scan = { path = "../modules/port-scan", package = "port-scan", optional = true }
+tokio = { workspace = true, optional = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+csv = { workspace = true }
+host-discovery = { path = "../modules/host-discovery", package = "host-discovery", optional = true }
+banners = { path = "../modules/banners", package = "banners", optional = true }
+udp-probe = { path = "../modules/udp-probe", package = "udp-probe", optional = true }
+web-surface = { path = "../modules/web-surface", package = "web-surface", optional = true }
+forensics = { path = "../modules/forensics", package = "forensics", optional = true }
+url = "2"
+time = { workspace = true }
+
+[features]
+default = []
+scan = ["port-scan", "tokio"]
+discover = ["host-discovery", "tokio", "port-scan"]
+banner = ["banners", "tokio"]
+web = ["banners", "port-scan", "tokio"]
+webscan = ["web-surface", "tokio", "port-scan"]
+forensics = ["dep:forensics"]
+udp = ["udp-probe", "tokio"]

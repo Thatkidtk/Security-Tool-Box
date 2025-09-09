@@ -1,0 +1,9 @@
+[package]
+name = "udp-probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+x509-parser = "0.15"
