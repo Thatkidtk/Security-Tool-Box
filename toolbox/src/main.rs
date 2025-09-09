@@ -385,6 +385,8 @@ fn main() -> Result<()> {
                         "started_at": r.started_at,
                         "ended_at": r.ended_at,
                         "duration_ms": r.duration_ms,
+                        "favicon_url": r.favicon_url,
+                        "favicon_mmh3": r.favicon_mmh3,
                         "error": r.error,
                     });
                     use std::io::Write;
@@ -403,6 +405,8 @@ fn main() -> Result<()> {
                         "started_at": r.started_at,
                         "ended_at": r.ended_at,
                         "duration_ms": r.duration_ms,
+                        "favicon_url": r.favicon_url,
+                        "favicon_mmh3": r.favicon_mmh3,
                         "error": r.error,
                     });
                     println!("{}", serde_json::to_string(&obj)?);

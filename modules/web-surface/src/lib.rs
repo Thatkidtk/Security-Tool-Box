@@ -2,7 +2,9 @@ use anyhow::Result;
 use reqwest::{Client, redirect::Policy, header::HeaderMap};
 use std::time::Duration;
 use tokio::sync::Semaphore;
-// use url::Url; // not used currently
+use url::Url;
+use std::io::Cursor;
+use base64::Engine;
 use time::OffsetDateTime;
 
 #[derive(Debug, Clone)]
@@ -24,6 +26,8 @@ pub struct WebResult {
     pub started_at: String,
     pub ended_at: String,
     pub duration_ms: u128,
+    pub favicon_url: Option<String>,
+    pub favicon_mmh3: Option<i32>,
     pub error: Option<String>,
 }
 
@@ -74,23 +78,28 @@ async fn probe_one(client: &Client, host: String, port: u16) -> WebResult {
                     Ok((t, f)) => (t, f),
                     Err(_) => (None, Vec::new()),
                 };
+                // Try favicon hash
+                let (fav_url, fav_hash) = match fetch_favicon_hash(client, &final_url).await {
+                    Ok(v) => v,
+                    Err(_) => (None, None),
+                };
                 let duration_ms = started.elapsed().as_millis();
                 let ended_at = OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
-                return WebResult { target: host, url, final_url, status: Some(status), server, title, fingerprints: fps, started_at, ended_at, duration_ms, error: None };
+                return WebResult { target: host, url, final_url, status: Some(status), server, title, fingerprints: fps, started_at, ended_at, duration_ms, favicon_url: fav_url, favicon_mmh3: fav_hash, error: None };
             }
             Err(e) => {
                 // Try next scheme
                 if scheme == "http" {
                     let duration_ms = started.elapsed().as_millis();
                     let ended_at = OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
-                    return WebResult { target: host, url: url.clone(), final_url: url.clone(), status: None, server: None, title: None, fingerprints: Vec::new(), started_at, ended_at, duration_ms, error: Some(e.to_string()) };
+                    return WebResult { target: host, url: url.clone(), final_url: url.clone(), status: None, server: None, title: None, fingerprints: Vec::new(), started_at, ended_at, duration_ms, favicon_url: None, favicon_mmh3: None, error: Some(e.to_string()) };
                 }
             }
         }
     }
     let started_at = OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
     let ended_at = started_at.clone();
-    WebResult { target: host.clone(), url: format!("https://{}:{}", host, port), final_url: format!("https://{}:{}", host, port), status: None, server: None, title: None, fingerprints: Vec::new(), started_at, ended_at, duration_ms: 0, error: Some("unreachable".into()) }
+    WebResult { target: host.clone(), url: format!("https://{}:{}", host, port), final_url: format!("https://{}:{}", host, port), status: None, server: None, title: None, fingerprints: Vec::new(), started_at, ended_at, duration_ms: 0, favicon_url: None, favicon_mmh3: None, error: Some("unreachable".into()) }
 }
 
 async fn fetch_head(client: &Client, url: &str) -> Result<(String, u16, Option<String>)> {
@@ -206,4 +215,21 @@ fn extract_meta_generator(body: &str) -> Option<String> {
         }
     }
     None
+}
+
+async fn fetch_favicon_hash(client: &Client, final_url: &str) -> anyhow::Result<(Option<String>, Option<i32>)> {
+    let parsed = Url::parse(final_url)?;
+    let mut origin = parsed.clone();
+    origin.set_path("");
+    origin.set_query(None);
+    origin.set_fragment(None);
+    let fav = origin.join("/favicon.ico")?;
+    let resp = client.get(fav.as_str()).send().await?;
+    if !resp.status().is_success() { return Ok((None, None)); }
+    let bytes = resp.bytes().await?;
+    if bytes.len() == 0 || bytes.len() > 200 * 1024 { return Ok((None, None)); }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let mut cursor = Cursor::new(b64.into_bytes());
+    let hash = murmur3::murmur3_32(&mut cursor, 0)? as i32; // signed like Shodan
+    Ok((Some(fav.to_string()), Some(hash)))
 }
