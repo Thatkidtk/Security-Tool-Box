@@ -419,6 +419,10 @@ fn main() -> Result<()> {
                 ResultsCmd::Export { db, table, format, out } => {
                     use results_sqlite as rdb;
                     let dbh = rdb::Db::open_or_create(&db)?;
+                    if format == "parquet" { 
+                        rdb::export_table_to_parquet(&dbh.conn, &table, &out)?; 
+                        return Ok(());
+                    }
                     let mut stmt = dbh.conn.prepare(&format!("SELECT * FROM {}", table))?;
                     let cols = stmt.column_names().iter().map(|s| s.to_string()).collect::<Vec<_>>();
                     let mut rows = stmt.query([])?;
